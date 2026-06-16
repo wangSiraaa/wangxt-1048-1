@@ -1,12 +1,30 @@
 import {
   StallStatus,
   ApplicationStatus,
+  ApplicationType,
   StallType,
   LineStatus,
   InspectionResult,
   SuspensionStatus,
   WarningLevel,
 } from "./enums";
+
+export interface CapacityBreakdownItem {
+  label: string;
+  power: number;
+  type: "existing" | "requested" | "adjacent_shared" | "reserved" | "available";
+}
+
+export interface CapacityBreakdown {
+  boxRated: number;
+  items: CapacityBreakdownItem[];
+  totalUsed: number;
+  remainingAfterApproval: number;
+  canFullyApprove: boolean;
+  maxApprovable: number;
+  adjacentSharedCircuit?: string;
+  duplicateDeviceWarnings?: string[];
+}
 
 export interface TemporaryPeriod {
   start: string;
@@ -74,6 +92,10 @@ export interface ElectricityApplication {
   notes?: string;
   rejectReason?: string;
   status: ApplicationStatus;
+  applicationType: ApplicationType;
+  originalPower?: number;
+  approvedBoostPower?: number;
+  capacityBreakdown?: CapacityBreakdown;
   approverId?: string;
   approverName?: string;
   approvalOpinion?: string;

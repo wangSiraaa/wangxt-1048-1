@@ -92,6 +92,8 @@
   .badge-withdrawn { @apply badge bg-gray-100 text-gray-600; }
   .badge-suspended { @apply badge bg-safe-danger/15 text-safe-danger; }
   .badge-abnormal { @apply badge bg-purple-100 text-purple-700; }
+  .badge-limited { @apply badge bg-amber-100 text-amber-700; }
+  .badge-partial { @apply badge bg-amber-100 text-amber-700; }
 
   .progress-bar {
     @apply relative h-2.5 w-full rounded-full bg-industrial-100 overflow-hidden;

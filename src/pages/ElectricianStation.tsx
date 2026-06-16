@@ -16,6 +16,7 @@ import {
   Activity,
   Clipboard,
   Gauge,
+  TrendingUp,
 } from "lucide-react";
 import { useApplicationStore } from "@/store/useApplicationStore";
 import { useBoxStore } from "@/store/useBoxStore";
@@ -26,21 +27,25 @@ import { useToast } from "@/components/common/Toast";
 import Modal from "@/components/common/Modal";
 import {
   ApplicationStatusBadge,
+  ApplicationTypeBadge,
   LineStatusBadge,
   StallStatusBadge,
   StallTypeBadge,
 } from "@/components/common/StatusBadge";
 import CapacityCard, { buildBoxInfo } from "@/components/capacity/CapacityCard";
+import CapacityBreakdownPanel from "@/components/capacity/CapacityBreakdownPanel";
 import {
   UserRole,
   ApplicationStatus,
+  ApplicationType,
+  ApplicationTypeLabel,
   LineStatus,
   LineStatusLabel,
   StallType,
   WarningLevel,
 } from "@/types/enums";
-import { ElectricityApplication, ConnectionRecord } from "@/types";
-import { calcBoxRemainingCapacity, formatKW } from "@/utils/capacity";
+import { ElectricityApplication, ConnectionRecord, CapacityBreakdown } from "@/types";
+import { calcBoxRemainingCapacity, buildCapacityBreakdown, formatKW } from "@/utils/capacity";
 import { validateConnection, validateStallLock } from "@/utils/validation";
 import { formatDateTime } from "@/utils/time";
 import DeviceListEditor from "@/components/form/DeviceListEditor";
@@ -83,7 +88,7 @@ function ElectricianInner() {
 
   const pendingList = useMemo(
     () =>
-      applications.filter((a) => a.status === ApplicationStatus.APPROVED).sort(
+      applications.filter((a) => a.status === ApplicationStatus.APPROVED || a.status === ApplicationStatus.PARTIALLY_APPROVED).sort(
         (a, b) => String(a.approvedAt || "").localeCompare(String(b.approvedAt || ""))
       ),
     [applications]
@@ -240,6 +245,7 @@ function ElectricianInner() {
       {tab === "pending" && (
         <PendingTab
           list={pendingList}
+          applications={applications}
           getStall={getStall}
           getBox={getBox}
           onConnect={(a) => {
@@ -253,6 +259,7 @@ function ElectricianInner() {
       {tab === "connected" && (
         <ConnectedTab
           list={connectedList}
+          applications={applications}
           getStall={getStall}
           getBox={getBox}
           onView={(a) => setViewApp(a)}
@@ -301,12 +308,14 @@ function ElectricianInner() {
 
 function PendingTab({
   list,
+  applications,
   getStall,
   getBox,
   onConnect,
   onView,
 }: {
   list: ElectricityApplication[];
+  applications: ElectricityApplication[];
   getStall: (id: string) => any;
   getBox: (id: string) => any;
   onConnect: (a: ElectricityApplication) => void;
@@ -343,12 +352,19 @@ function PendingTab({
               const remaining = box
                 ? calcBoxRemainingCapacity(box, [stall!])
                 : 0;
-              const canConnect = box && a.peakPower <= remaining;
+              const isTempBoost = a.applicationType === ApplicationType.TEMPORARY_BOOST;
+              const effectivePower = a.status === ApplicationStatus.PARTIALLY_APPROVED && a.approvedBoostPower != null
+                ? (a.originalPower || 0) + a.approvedBoostPower
+                : a.peakPower;
+              const canConnect = box && effectivePower <= remaining;
               return (
                 <tr key={a.id}>
                   <td>
                     <div className="font-mono text-xs text-industrial-700">{a.id.slice(0, 10)}...</div>
-                    <ApplicationStatusBadge status={a.status} />
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <ApplicationStatusBadge status={a.status} />
+                      <ApplicationTypeBadge type={a.applicationType} />
+                    </div>
                   </td>
                   <td>
                     <div className="font-medium text-industrial-800">{a.merchantName}</div>
@@ -374,8 +390,13 @@ function PendingTab({
                   </td>
                   <td>
                     <div className="font-semibold text-industrial-800">
-                      {formatKW(a.peakPower)}
+                      {formatKW(effectivePower)}
                     </div>
+                    {a.status === ApplicationStatus.PARTIALLY_APPROVED && a.approvedBoostPower != null && (
+                      <div className="text-[10px] text-industrial-400 mt-0.5">
+                        (原{formatKW(a.originalPower || 0)}+扩{formatKW(a.approvedBoostPower)})
+                      </div>
+                    )}
                   </td>
                   <td>
                     <div
@@ -420,17 +441,45 @@ function PendingTab({
           </tbody>
         </table>
       </div>
+      {list.some((a) => isTempBoostApp(a)) && (
+        <div className="p-4 border-t border-industrial-100 space-y-3">
+          {list
+            .filter((a) => isTempBoostApp(a))
+            .map((a) => {
+              const stall = getStall(a.stallId);
+              const box = stall ? getBox(stall.distributionBoxId) : null;
+              const breakdown = a.capacityBreakdown || (box ? buildCapacityBreakdown(box, [stall!], a.peakPower, a.stallId, applications) : null);
+              return (
+                <div key={a.id} className="space-y-2">
+                  <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+                    <TrendingUp size={16} className="shrink-0 text-amber-600" />
+                    <span>
+                      临时扩容 · 原功率 {formatKW(a.originalPower || 0)} kW → 审批通过 {formatKW(a.approvedBoostPower != null ? (a.originalPower || 0) + a.approvedBoostPower : a.peakPower)} kW
+                    </span>
+                  </div>
+                  {breakdown && <CapacityBreakdownPanel breakdown={breakdown} />}
+                </div>
+              );
+            })}
+        </div>
+      )}
     </div>
   );
 }
 
+function isTempBoostApp(a: ElectricityApplication): boolean {
+  return a.applicationType === ApplicationType.TEMPORARY_BOOST;
+}
+
 function ConnectedTab({
   list,
+  applications,
   getStall,
   getBox,
   onView,
 }: {
   list: ElectricityApplication[];
+  applications: ElectricityApplication[];
   getStall: (id: string) => any;
   getBox: (id: string) => any;
   onView: (a: ElectricityApplication) => void;
@@ -462,6 +511,10 @@ function ConnectedTab({
             {list.map((a) => {
               const stall = getStall(a.stallId);
               const box = stall ? getBox(stall.distributionBoxId) : null;
+              const isTempBoost = a.applicationType === ApplicationType.TEMPORARY_BOOST;
+              const actualPower = isTempBoost && a.approvedBoostPower != null
+                ? (a.originalPower || 0) + a.approvedBoostPower
+                : a.peakPower;
               const rate =
                 stall && stall.ratedCapacity > 0
                   ? stall.occupiedCapacity / stall.ratedCapacity
@@ -470,7 +523,14 @@ function ConnectedTab({
                 <tr key={a.id}>
                   <td>
                     <div className="font-medium">{stall?.code}</div>
-                    <StallTypeBadge type={stall?.stallType} />
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <StallTypeBadge type={stall?.stallType} />
+                      {isTempBoost && (
+                        <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 border border-amber-200">
+                          <TrendingUp size={10} /> 临时扩容
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td>
                     <div className="font-medium">{a.merchantName}</div>
@@ -480,7 +540,14 @@ function ConnectedTab({
                     <div>{box?.code}</div>
                     {box && <LineStatusBadge status={box.lineStatus} />}
                   </td>
-                  <td className="font-semibold">{formatKW(a.peakPower)}</td>
+                  <td>
+                    <div className="font-semibold">{formatKW(actualPower)}</div>
+                    {isTempBoost && a.approvedBoostPower != null && (
+                      <div className="text-[10px] text-industrial-400 mt-0.5">
+                        (原{formatKW(a.originalPower || 0)}+扩{formatKW(a.approvedBoostPower)})
+                      </div>
+                    )}
+                  </td>
                   <td>
                     <div className="w-24">
                       <div className="progress-bar">
@@ -609,6 +676,8 @@ function ApplicationDetailModal({
 }) {
   const stall = getStall(app.stallId);
   const box = stall ? getBox(stall.distributionBoxId) : null;
+  const isTempBoost = app.applicationType === ApplicationType.TEMPORARY_BOOST;
+  const breakdown = app.capacityBreakdown || (box ? buildCapacityBreakdown(box, [stall!], app.peakPower, app.stallId, []) : null);
   return (
     <Modal title="申请单详情" size="lg" onClose={onClose}>
       <div className="space-y-5">
@@ -621,9 +690,43 @@ function ApplicationDetailModal({
           </div>
           <div>
             <div className="text-xs text-industrial-500 mb-1">申请状态</div>
-            <ApplicationStatusBadge status={app.status} />
+            <div className="flex items-center gap-1.5">
+              <ApplicationStatusBadge status={app.status} />
+              <ApplicationTypeBadge type={app.applicationType} />
+            </div>
           </div>
         </div>
+
+        {isTempBoost && (
+          <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp size={16} className="text-amber-600" />
+              <span className="text-sm font-semibold text-amber-800">临时扩容功率对比</span>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="text-center">
+                <div className="text-xs text-amber-600 mb-1">原功率</div>
+                <div className="font-mono font-bold text-industrial-800">
+                  {formatKW(app.originalPower || 0)} kW
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-amber-600 mb-1">
+                  {app.approvedBoostPower != null ? "审批通过扩容" : "申请扩容"}
+                </div>
+                <div className="font-mono font-bold text-amber-700">
+                  +{formatKW(app.approvedBoostPower != null ? app.approvedBoostPower : app.peakPower - (app.originalPower || 0))} kW
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-amber-600 mb-1">峰值合计</div>
+                <div className="font-mono font-bold text-industrial-800">
+                  {formatKW(app.approvedBoostPower != null ? (app.originalPower || 0) + app.approvedBoostPower : app.peakPower)} kW
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -655,6 +758,11 @@ function ApplicationDetailModal({
             <div className="text-xs text-industrial-500 mb-1">峰值功率</div>
             <div className="input bg-industrial-50 font-semibold text-safe-info">
               {formatKW(app.peakPower)}
+              {isTempBoost && app.originalPower != null && (
+                <span className="text-[10px] text-industrial-400 ml-1">
+                  (原{formatKW(app.originalPower)}+扩{formatKW(app.peakPower - app.originalPower)})
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -708,6 +816,8 @@ function ApplicationDetailModal({
             />
           </div>
         )}
+
+        {breakdown && <CapacityBreakdownPanel breakdown={breakdown} />}
 
         {app.approverName && (
           <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-1">
@@ -766,6 +876,11 @@ function ConnectModal({
   const check = validateConnection(app, stall, box, allStalls, safetyPassed);
   const canSubmit = check.valid && signature.trim().length > 0;
 
+  const isTempBoost = app.applicationType === ApplicationType.TEMPORARY_BOOST;
+  const effectivePower = app.status === ApplicationStatus.PARTIALLY_APPROVED && app.approvedBoostPower != null
+    ? (app.originalPower || 0) + app.approvedBoostPower
+    : app.peakPower;
+
   return (
     <Modal
       title={`接电确认 - ${stall?.code} / ${app.merchantName}`}
@@ -777,12 +892,17 @@ function ConnectModal({
           <div className="stat-card bg-blue-50 border-l-4 border-safe-info">
             <div className="text-xs text-industrial-500">申请功率</div>
             <div className="text-xl font-bold text-industrial-800 mt-1">
-              {formatKW(app.peakPower)}
+              {formatKW(effectivePower)}
             </div>
+            {isTempBoost && app.originalPower != null && (
+              <div className="text-[10px] text-industrial-400 mt-0.5">
+                (原{formatKW(app.originalPower)}+扩{formatKW(effectivePower - app.originalPower)})
+              </div>
+            )}
           </div>
           <div
             className={`stat-card border-l-4 ${
-              remaining >= app.peakPower
+              remaining >= effectivePower
                 ? "bg-green-50 border-safe-success"
                 : "bg-red-50 border-safe-danger"
             }`}
@@ -790,7 +910,7 @@ function ConnectModal({
             <div className="text-xs text-industrial-500">剩余容量</div>
             <div
               className={`text-xl font-bold mt-1 ${
-                remaining >= app.peakPower ? "text-safe-success" : "text-safe-danger"
+                remaining >= effectivePower ? "text-safe-success" : "text-safe-danger"
               }`}
             >
               {formatKW(remaining)}
@@ -799,10 +919,19 @@ function ConnectModal({
           <div className="stat-card bg-yellow-50 border-l-4 border-safe-warning">
             <div className="text-xs text-industrial-500">差额</div>
             <div className="text-xl font-bold text-industrial-800 mt-1">
-              {formatKW(remaining - app.peakPower)}
+              {formatKW(remaining - effectivePower)}
             </div>
           </div>
         </div>
+
+        {isTempBoost && (
+          <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+            <TrendingUp size={16} className="shrink-0 text-amber-600" />
+            <span>
+              临时扩容 · 原功率 {formatKW(app.originalPower || 0)} kW → 审批通过 {formatKW(effectivePower)} kW
+            </span>
+          </div>
+        )}
 
         {!check.valid && (
           <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-safe-danger text-sm flex items-start gap-2">

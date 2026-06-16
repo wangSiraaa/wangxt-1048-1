@@ -123,8 +123,8 @@ export function validateSuspend(stall: Stall): ValidationResult {
 }
 
 export function validateRestore(stall: Stall): ValidationResult {
-  if (stall.status !== StallStatus.SUSPENDED) {
-    return { valid: false, message: "仅暂停状态摊位可执行恢复操作" };
+  if (stall.status !== StallStatus.SUSPENDED && stall.status !== StallStatus.LIMITED) {
+    return { valid: false, message: "仅暂停或限电状态摊位可执行恢复操作" };
   }
   return { valid: true };
 }

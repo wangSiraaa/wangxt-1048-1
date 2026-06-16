@@ -13,6 +13,8 @@ import {
   AlertCircle,
   CheckCircle2,
   Info,
+  TrendingUp,
+  Zap,
 } from "lucide-react";
 import { useStallStore } from "@/store/useStallStore";
 import { useBoxStore } from "@/store/useBoxStore";
@@ -21,8 +23,10 @@ import { useAuthStore } from "@/store/useAuthStore";
 import { useToast } from "@/components/common/Toast";
 import Modal from "@/components/common/Modal";
 import StallGrid from "@/components/stall/StallGrid";
+import CapacityBreakdownPanel from "@/components/capacity/CapacityBreakdownPanel";
 import {
   ApplicationStatusBadge,
+  ApplicationTypeBadge,
   StallStatusBadge,
   StallTypeBadge,
 } from "@/components/common/StatusBadge";
@@ -31,9 +35,16 @@ import {
   StallType,
   StallStatus,
   ApplicationStatus,
+  ApplicationType,
+  ApplicationTypeLabel,
 } from "@/types/enums";
-import { Stall, ElectricityApplication, DeviceItem } from "@/types";
-import { formatKW, calcBoxRemainingCapacity } from "@/utils/capacity";
+import { Stall, ElectricityApplication, DeviceItem, CapacityBreakdown } from "@/types";
+import {
+  formatKW,
+  calcBoxRemainingCapacity,
+  buildCapacityBreakdown,
+  checkDuplicateHighPowerDevices,
+} from "@/utils/capacity";
 import { formatDateTime } from "@/utils/time";
 import DeviceListEditor, {
   DeviceRow,
@@ -67,11 +78,13 @@ export default function MerchantApplication() {
 function MerchantInner() {
   const [tab, setTab] = useState<TabKey>("apply");
   const { currentUserName = "系统用户" } = useAuthStore();
-  const { applications = [], submit, withdraw } = useApplicationStore();
+  const { applications = [], submit, submitTemporaryBoost, withdraw } = useApplicationStore();
   const { stalls = [] } = useStallStore();
   const toast = useToast();
   const [formOpen, setFormOpen] = useState(false);
   const [draftStall, setDraftStall] = useState<Stall | null>(null);
+  const [boostFormOpen, setBoostFormOpen] = useState(false);
+  const [boostDraftStall, setBoostDraftStall] = useState<Stall | null>(null);
   const [viewingId, setViewingId] = useState<string | null>(null);
 
   const myApps = useMemo(
@@ -93,6 +106,15 @@ function MerchantInner() {
     }
     setDraftStall(stall);
     setFormOpen(true);
+  };
+
+  const openBoostFor = (stall: Stall) => {
+    if (stall.status !== StallStatus.CONNECTED) {
+      toast.warning("仅已接电摊位可申请临时扩容");
+      return;
+    }
+    setBoostDraftStall(stall);
+    setBoostFormOpen(true);
   };
 
   const doWithdraw = (id: string) => {
@@ -144,10 +166,15 @@ function MerchantInner() {
       {tab === "apply" && (
         <ApplyPanel
           onApply={openApplyFor}
+          onBoost={openBoostFor}
           draftStall={draftStall}
           formOpen={formOpen}
           setFormOpen={setFormOpen}
           setDraftStall={setDraftStall}
+          boostDraftStall={boostDraftStall}
+          boostFormOpen={boostFormOpen}
+          setBoostFormOpen={setBoostFormOpen}
+          setBoostDraftStall={setBoostDraftStall}
         />
       )}
 
@@ -174,16 +201,22 @@ function MerchantInner() {
                 const canWithdraw =
                   app.status === ApplicationStatus.PENDING ||
                   app.status === ApplicationStatus.APPROVED;
+                const isBoost = app.applicationType === ApplicationType.TEMPORARY_BOOST;
                 return (
                   <div key={app.id} className="card">
                     <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
                       <div className="flex items-start gap-4">
-                        <div className="w-12 h-12 rounded-xl bg-industrial-50 flex items-center justify-center shrink-0">
-                          <FileWarning size={22} className="text-industrial-600" />
+                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${isBoost ? "bg-amber-50" : "bg-industrial-50"}`}>
+                          {isBoost ? (
+                            <TrendingUp size={22} className="text-amber-600" />
+                          ) : (
+                            <FileWarning size={22} className="text-industrial-600" />
+                          )}
                         </div>
                         <div>
                           <div className="flex items-center gap-2 flex-wrap mb-1">
                             <ApplicationStatusBadge status={app.status} />
+                            <ApplicationTypeBadge type={app.applicationType} />
                             <span className="font-mono font-semibold text-industrial-800 text-sm">
                               摊位 {stall?.code || "-"}
                             </span>
@@ -194,26 +227,59 @@ function MerchantInner() {
                             <span className="font-mono">{app.id.slice(-12)}</span>
                             {" · "}提交时间：{formatDateTime(app.createdAt)}
                           </p>
-                          <div className="grid grid-cols-3 gap-4 text-xs">
-                            <div>
-                              <div className="text-industrial-400 mb-0.5">峰值功率</div>
-                              <div className="font-mono font-semibold text-industrial-800">
-                                {formatKW(app.peakPower)}
-                              </div>
+                          {isBoost && app.originalPower != null && (
+                            <div className="mb-2 p-2 rounded-lg bg-amber-50 border border-amber-100 text-xs text-amber-800 flex items-center gap-1.5">
+                              <Zap size={12} className="shrink-0" />
+                              <span>
+                                原功率 <span className="font-mono font-semibold">{formatKW(app.originalPower)}</span> kW
+                                {" → "}
+                                申请扩容 <span className="font-mono font-semibold">{formatKW(app.peakPower)}</span> kW
+                              </span>
                             </div>
+                          )}
+                          <div className={`grid ${isBoost ? "grid-cols-2" : "grid-cols-3"} gap-4 text-xs`}>
+                            {!isBoost && (
+                              <div>
+                                <div className="text-industrial-400 mb-0.5">峰值功率</div>
+                                <div className="font-mono font-semibold text-industrial-800">
+                                  {formatKW(app.peakPower)}
+                                </div>
+                              </div>
+                            )}
+                            {isBoost && (
+                              <div>
+                                <div className="text-industrial-400 mb-0.5">扩容功率</div>
+                                <div className="font-mono font-semibold text-amber-700">
+                                  +{formatKW(app.peakPower)} kW
+                                </div>
+                              </div>
+                            )}
                             <div>
                               <div className="text-industrial-400 mb-0.5">设备数量</div>
                               <div className="font-mono font-semibold text-industrial-800">
                                 {app.devices.length} 台
                               </div>
                             </div>
-                            <div>
-                              <div className="text-industrial-400 mb-0.5">食品摊位</div>
-                              <div className="font-semibold text-industrial-800">
-                                {app.isFoodStall ? "是" : "否"}
+                            {!isBoost && (
+                              <div>
+                                <div className="text-industrial-400 mb-0.5">食品摊位</div>
+                                <div className="font-semibold text-industrial-800">
+                                  {app.isFoodStall ? "是" : "否"}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          {app.status === ApplicationStatus.PARTIALLY_APPROVED && app.capacityBreakdown && (
+                            <div className="mt-3 p-2.5 rounded-lg bg-amber-50 border border-amber-100 text-xs text-amber-800 flex items-start gap-1.5">
+                              <AlertCircle size={12} className="mt-0.5 shrink-0" />
+                              <div>
+                                <div className="font-medium mb-0.5">部分通过说明</div>
+                                申请功率超出可用容量，已部分审批通过{" "}
+                                <span className="font-mono font-semibold">{formatKW(app.approvedBoostPower ?? 0)}</span> kW，
+                                审批后剩余 <span className="font-mono font-semibold">{formatKW(app.capacityBreakdown.remainingAfterApproval)}</span> kW。
                               </div>
                             </div>
-                          </div>
+                          )}
                           {app.rejectReason && (
                             <div className="mt-3 p-2.5 rounded-lg bg-red-50 border border-red-100 text-xs text-safe-danger flex items-start gap-1.5">
                               <AlertCircle size={12} className="mt-0.5 shrink-0" />
@@ -250,6 +316,11 @@ function MerchantInner() {
                         )}
                       </div>
                     </div>
+                    {app.capacityBreakdown && (
+                      <div className="mt-2">
+                        <CapacityBreakdownPanel breakdown={app.capacityBreakdown} />
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -280,6 +351,29 @@ function MerchantInner() {
         />
       )}
 
+      {boostFormOpen && boostDraftStall && (
+        <TemporaryBoostFormModal
+          stall={boostDraftStall}
+          onClose={() => setBoostFormOpen(false)}
+          onSubmit={(payload) => {
+            try {
+              const { devices: devs, originalPower, capacityBreakdown: bd, ...rest } = payload;
+              submitTemporaryBoost(
+                { ...rest, stallId: boostDraftStall.id, contactInfo: payload.contactPhone, activityPeriod: payload.notes || "" },
+                devs.map((d) => ({ deviceName: d.deviceName, quantity: d.quantity, unitPower: d.unitPower })),
+                originalPower
+              );
+              toast.success("临时扩容申请已提交，等待审批");
+              setBoostFormOpen(false);
+              setBoostDraftStall(null);
+              setTab("myapps");
+            } catch (e: any) {
+              toast.error(e?.message || "提交失败");
+            }
+          }}
+        />
+      )}
+
       {viewingId && (
         <ViewAppModal
           app={applications.find((a) => a.id === viewingId)!}
@@ -295,16 +389,23 @@ function MerchantInner() {
 
 function ApplyPanel({
   onApply,
+  onBoost,
 }: {
   onApply: (stall: Stall) => void;
+  onBoost: (stall: Stall) => void;
   draftStall: Stall | null;
   formOpen: boolean;
   setFormOpen: (b: boolean) => void;
   setDraftStall: (s: Stall | null) => void;
+  boostDraftStall: Stall | null;
+  boostFormOpen: boolean;
+  setBoostFormOpen: (b: boolean) => void;
+  setBoostDraftStall: (s: Stall | null) => void;
 }) {
   const { stalls = [] } = useStallStore();
   const { boxes = [] } = useBoxStore();
   const idleStalls = stalls.filter((s) => s.status === StallStatus.IDLE && !s.locked);
+  const connectedStalls = stalls.filter((s) => s.status === StallStatus.CONNECTED && !s.locked);
 
   return (
     <div className="space-y-6">
@@ -322,24 +423,81 @@ function ApplyPanel({
           desc="必须填写完整的设备清单和食品经营资质编号"
         />
         <InfoTipCard
-          icon={<Lock size={18} />}
+          icon={<TrendingUp size={18} />}
           color="emerald"
-          title="容量校验"
-          desc="提交前会自动校验剩余容量，超出将自动拒绝"
+          title="临时扩容"
+          desc="已接电摊位可申请临时扩容，审批后功率叠加至摊位"
         />
       </div>
 
       <div className="card">
         <div className="card-header">
           <div>
-            <h3 className="font-semibold text-industrial-800">选择空闲摊位</h3>
+            <h3 className="font-semibold text-industrial-800">申请接电</h3>
             <p className="text-xs text-industrial-500 mt-0.5">
-              当前共 <span className="font-mono font-semibold">{idleStalls.length}</span> 个摊位可申请，
+              当前共 <span className="font-mono font-semibold">{idleStalls.length}</span> 个空闲摊位可申请，
               点击摊位卡片开始申请
             </p>
           </div>
         </div>
         <StallGrid boxes={boxes} stalls={stalls} onSelectStall={onApply} />
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold text-industrial-800">临时扩容</h3>
+              <span className="badge-partial">扩容</span>
+            </div>
+            <p className="text-xs text-industrial-500 mt-0.5">
+              当前共 <span className="font-mono font-semibold">{connectedStalls.length}</span> 个已接电摊位可申请扩容，
+              点击摊位卡片申请临时扩容
+            </p>
+          </div>
+        </div>
+        {connectedStalls.length === 0 ? (
+          <div className="p-8 text-center">
+            <div className="w-12 h-12 rounded-full bg-amber-50 flex items-center justify-center mx-auto mb-3">
+              <TrendingUp size={22} className="text-amber-400" />
+            </div>
+            <p className="text-sm text-industrial-500">暂无已接电摊位可申请扩容</p>
+          </div>
+        ) : (
+          <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 p-5 pt-0">
+            {connectedStalls
+              .sort((a, b) => String(a.code || "").localeCompare(String(b.code || "")))
+              .map((s) => {
+                const box = boxes.find((b) => b.id === s.distributionBoxId);
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => onBoost(s)}
+                    className="p-3 rounded-xl border border-amber-200 bg-amber-50/50 hover:border-amber-400 hover:bg-amber-50 transition-all text-left group"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Zap size={14} className="text-amber-500" />
+                      <span className="font-mono font-semibold text-sm text-industrial-800 group-hover:text-amber-700">
+                        {s.code}
+                      </span>
+                    </div>
+                    <div className="text-xs text-industrial-600 truncate mb-1.5">{s.name}</div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-industrial-400">当前功率</span>
+                      <span className="font-mono font-semibold text-amber-700">
+                        {formatKW(s.occupiedCapacity)} kW
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs mt-0.5">
+                      <span className="text-industrial-400">配电箱</span>
+                      <span className="font-mono text-industrial-500">{box?.code || "-"}</span>
+                    </div>
+                  </button>
+                );
+              })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -380,6 +538,18 @@ interface ApplyPayload {
   peakPower: number;
   devices: DeviceItem[];
   notes: string;
+}
+
+interface BoostPayload {
+  merchantName: string;
+  contactPhone: string;
+  isFoodStall: boolean;
+  foodLicenseNo: string;
+  originalPower: number;
+  peakPower: number;
+  devices: DeviceItem[];
+  notes: string;
+  capacityBreakdown: CapacityBreakdown;
 }
 
 function ApplyFormModal({
@@ -570,6 +740,268 @@ function ApplyFormModal({
   );
 }
 
+function TemporaryBoostFormModal({
+  stall,
+  onClose,
+  onSubmit,
+}: {
+  stall: Stall;
+  onClose: () => void;
+  onSubmit: (payload: BoostPayload) => void;
+}) {
+  const toast = useToast();
+  const { boxes = [] } = useBoxStore();
+  const { stalls = [] } = useStallStore();
+  const { applications = [] } = useApplicationStore();
+  const { currentUserName = "系统用户" } = useAuthStore();
+  const box = boxes.find((b) => b.id === stall.distributionBoxId);
+  const remaining = box ? calcBoxRemainingCapacity(box, stalls) : 0;
+  const originalPower = stall.occupiedCapacity || 0;
+
+  const [merchantName, setMerchantName] = useState(currentUserName);
+  const [contactPhone, setContactPhone] = useState("");
+  const [isFoodStall, setIsFoodStall] = useState(stall.stallType === StallType.FOOD);
+  const [foodLicenseNo, setFoodLicenseNo] = useState("");
+  const [devices, setDevices] = useState<DeviceRow[]>([createEmptyRow()]);
+  const [notes, setNotes] = useState("");
+  const [breakdown, setBreakdown] = useState<CapacityBreakdown | null>(null);
+
+  const boostPower = devices.reduce((s, r) => s + (r.totalPower || 0), 0);
+  const totalAfterBoost = originalPower + boostPower;
+  const exceed = box ? totalAfterBoost > box.ratedCapacity + 0.0001 : false;
+
+  const recalcBreakdown = () => {
+    if (!box || boostPower <= 0) return null;
+    return buildCapacityBreakdown(box, stalls, boostPower, stall.id, applications);
+  };
+
+  const submit = () => {
+    if (!merchantName.trim()) return toast.error("请填写商户名称");
+    if (!contactPhone.trim()) return toast.error("请填写联系电话");
+    const validDevices = devices.filter(
+      (d) => d.deviceName.trim() && d.quantity > 0 && d.unitPower >= 0
+    );
+    if (validDevices.length === 0) {
+      return toast.error("请填写至少一项扩容设备清单");
+    }
+    if (boostPower <= 0) {
+      return toast.error("扩容功率必须大于 0");
+    }
+    if (exceed) {
+      return toast.error(
+        `扩容后总功率（${totalAfterBoost.toFixed(2)} kW）超出配电箱额定容量（${box?.ratedCapacity.toFixed(2)} kW）`
+      );
+    }
+
+    const bd = recalcBreakdown();
+    if (bd && !bd.canFullyApprove) {
+      setBreakdown(bd);
+      toast.warning("申请功率超出剩余容量，可能被部分审批");
+    }
+
+    const dupWarnings = checkDuplicateHighPowerDevices(
+      stall.id,
+      validDevices.map((d) => ({ deviceName: d.deviceName.trim(), unitPower: d.unitPower })),
+      applications,
+      stalls
+    );
+
+    const finalDevices: DeviceItem[] = validDevices.map((d) => ({
+      id: genId("dev"),
+      applicationId: "",
+      deviceName: d.deviceName.trim(),
+      quantity: d.quantity,
+      unitPower: d.unitPower,
+    }));
+
+    const finalBd = bd || recalcBreakdown();
+    if (finalBd && dupWarnings.length > 0) {
+      finalBd.duplicateDeviceWarnings = dupWarnings;
+    }
+
+    onSubmit({
+      merchantName: merchantName.trim(),
+      contactPhone: contactPhone.trim(),
+      isFoodStall,
+      foodLicenseNo: foodLicenseNo.trim(),
+      originalPower,
+      peakPower: +boostPower.toFixed(2),
+      devices: finalDevices,
+      notes: notes.trim(),
+      capacityBreakdown: finalBd!,
+    });
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`临时扩容申请 · ${stall.code}`}
+      size="xl"
+      footer={
+        <>
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            <X size={14} /> 取消
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={submit}
+            disabled={exceed || boostPower <= 0}
+          >
+            <TrendingUp size={14} /> 提交扩容申请
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        <div className="p-4 rounded-xl bg-gradient-to-r from-amber-50 to-white border border-amber-200">
+          <div className="flex items-center gap-2 mb-3">
+            <Zap size={16} className="text-amber-600" />
+            <span className="font-semibold text-amber-800">当前用电信息</span>
+          </div>
+          <div className="grid md:grid-cols-4 gap-4 text-sm">
+            <Field label="摊位编号">
+              <div className="font-mono font-semibold">{stall.code}</div>
+            </Field>
+            <Field label="摊位名称">
+              <div className="font-medium text-industrial-800">{stall.name}</div>
+            </Field>
+            <Field label="当前功率（原功率）">
+              <div className="font-mono font-semibold text-amber-700">
+                {formatKW(originalPower)} kW
+              </div>
+            </Field>
+            <Field label="配电箱剩余容量">
+              <div
+                className={`font-mono font-semibold ${
+                  remaining < 5 ? "text-safe-danger" : "text-safe-normal"
+                }`}
+              >
+                {formatKW(remaining)}
+              </div>
+            </Field>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <Field label="商户名称" required>
+            <input
+              className="input"
+              value={merchantName}
+              onChange={(e) => setMerchantName(e.target.value)}
+              placeholder="如：张三小吃店"
+            />
+          </Field>
+          <Field label="联系电话" required>
+            <input
+              className="input font-mono"
+              value={contactPhone}
+              onChange={(e) => setContactPhone(e.target.value)}
+              placeholder="如：138****8888"
+            />
+          </Field>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <Field label="是否为食品摊位">
+            <label className="flex items-center gap-2 cursor-pointer h-[42px]">
+              <input
+                type="checkbox"
+                checked={isFoodStall}
+                disabled={stall.stallType === StallType.FOOD}
+                onChange={(e) => setIsFoodStall(e.target.checked)}
+                className="w-4 h-4 rounded text-industrial-700 focus:ring-industrial-500"
+              />
+              <span className="text-sm text-industrial-700">
+                是
+              </span>
+            </label>
+          </Field>
+          {isFoodStall && (
+            <Field label="食品经营资质编号" required>
+              <input
+                className="input font-mono"
+                value={foodLicenseNo}
+                onChange={(e) => setFoodLicenseNo(e.target.value)}
+                placeholder="如 JY14400000000000"
+              />
+            </Field>
+          )}
+        </div>
+
+        <div className="p-3 rounded-lg bg-industrial-50 border border-industrial-100 text-xs text-industrial-600 flex items-center gap-2">
+          <Info size={14} className="shrink-0 text-industrial-400" />
+          以下设备列表为<strong>扩容新增设备</strong>，扩容功率将叠加至当前已有功率之上。
+          原功率 <span className="font-mono font-semibold">{formatKW(originalPower)}</span> kW 不可修改。
+        </div>
+
+        <DeviceListEditor
+          value={devices}
+          onChange={(newDevices) => {
+            setDevices(newDevices);
+            const bp = newDevices.reduce((s, r) => s + (r.totalPower || 0), 0);
+            if (bp > 0 && box) {
+              const bd = buildCapacityBreakdown(box, stalls, bp, stall.id, applications);
+              setBreakdown(bd);
+            } else {
+              setBreakdown(null);
+            }
+          }}
+          required
+        />
+
+        <div className="p-3 rounded-lg bg-industrial-50 border border-industrial-100">
+          <div className="grid grid-cols-3 gap-4 text-sm">
+            <div>
+              <div className="text-industrial-400 text-xs mb-0.5">原功率</div>
+              <div className="font-mono font-semibold text-industrial-800">
+                {formatKW(originalPower)} kW
+              </div>
+            </div>
+            <div>
+              <div className="text-industrial-400 text-xs mb-0.5">扩容功率</div>
+              <div className={`font-mono font-semibold ${boostPower > 0 ? "text-amber-700" : "text-industrial-800"}`}>
+                +{formatKW(boostPower)} kW
+              </div>
+            </div>
+            <div>
+              <div className="text-industrial-400 text-xs mb-0.5">扩容后总计</div>
+              <div className={`font-mono font-semibold ${exceed ? "text-safe-danger" : "text-safe-normal"}`}>
+                {formatKW(totalAfterBoost)} kW
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {exceed && (
+          <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-safe-danger text-xs flex items-start gap-2">
+            <AlertCircle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              扩容后总功率 {totalAfterBoost.toFixed(2)} kW，超过配电箱额定容量{" "}
+              {box?.ratedCapacity.toFixed(2)} kW，请减少扩容设备。
+            </div>
+          </div>
+        )}
+
+        {breakdown && boostPower > 0 && (
+          <CapacityBreakdownPanel breakdown={breakdown} />
+        )}
+
+        <Field label="备注说明">
+          <textarea
+            className="textarea"
+            rows={3}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="扩容原因、活动说明、用电时段等补充信息"
+          />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
 function Field({
   label,
   children,
@@ -596,6 +1028,8 @@ function ViewAppModal({
   stall?: Stall;
   onClose: () => void;
 }) {
+  const isBoost = app.applicationType === ApplicationType.TEMPORARY_BOOST;
+
   return (
     <Modal
       open
@@ -606,15 +1040,34 @@ function ViewAppModal({
       <div className="space-y-4 text-sm">
         <div className="flex items-center gap-2 flex-wrap">
           <ApplicationStatusBadge status={app.status} />
+          <ApplicationTypeBadge type={app.applicationType} />
           <span className="font-mono font-semibold">摊位 {stall?.code || "-"}</span>
           <StallStatusBadge status={stall?.status || StallStatus.IDLE} />
         </div>
+
+        {isBoost && app.originalPower != null && (
+          <div className="p-3 rounded-lg bg-amber-50 border border-amber-100 text-xs text-amber-800 flex items-center gap-2">
+            <Zap size={14} className="shrink-0" />
+            <span>
+              原功率 <span className="font-mono font-semibold">{formatKW(app.originalPower)}</span> kW
+              {" → "}
+              申请扩容 <span className="font-mono font-semibold">{formatKW(app.peakPower)}</span> kW
+              {app.approvedBoostPower != null && (
+                <>
+                  {" → "}
+                  审批通过 <span className="font-mono font-semibold">{formatKW(app.approvedBoostPower)}</span> kW
+                </>
+              )}
+            </span>
+          </div>
+        )}
+
         <div className="grid md:grid-cols-2 gap-4">
           <Field label="商户">
             <div>{app.merchantName}</div>
           </Field>
           <Field label="联系电话">
-            <div className="font-mono">{app.contactPhone || "-"}</div>
+            <div className="font-mono">{app.contactInfo || app.contactPhone || "-"}</div>
           </Field>
           <Field label="食品摊位">
             <div>{app.isFoodStall ? "是" : "否"}</div>
@@ -622,9 +1075,24 @@ function ViewAppModal({
           <Field label="资质编号">
             <div className="font-mono">{app.foodLicenseNo || "-"}</div>
           </Field>
-          <Field label="峰值功率">
-            <div className="font-mono font-semibold">{formatKW(app.peakPower)}</div>
-          </Field>
+          {isBoost ? (
+            <>
+              <Field label="原功率">
+                <div className="font-mono font-semibold text-industrial-800">
+                  {formatKW(app.originalPower ?? 0)} kW
+                </div>
+              </Field>
+              <Field label="扩容功率">
+                <div className="font-mono font-semibold text-amber-700">
+                  +{formatKW(app.peakPower)} kW
+                </div>
+              </Field>
+            </>
+          ) : (
+            <Field label="峰值功率">
+              <div className="font-mono font-semibold">{formatKW(app.peakPower)}</div>
+            </Field>
+          )}
           <Field label="提交时间">
             <div>{formatDateTime(app.createdAt)}</div>
           </Field>
@@ -666,7 +1134,7 @@ function ViewAppModal({
         </div>
         <Field label="备注">
           <div className="p-3 rounded bg-industrial-50 text-industrial-700 min-h-[40px]">
-            {app.notes || "无"}
+            {app.notes || app.activityPeriod || "无"}
           </div>
         </Field>
         {app.rejectReason && (
@@ -675,6 +1143,9 @@ function ViewAppModal({
               {app.rejectReason}
             </div>
           </Field>
+        )}
+        {app.capacityBreakdown && (
+          <CapacityBreakdownPanel breakdown={app.capacityBreakdown} />
         )}
       </div>
     </Modal>

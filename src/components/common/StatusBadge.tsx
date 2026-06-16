@@ -1,5 +1,5 @@
 import React from "react";
-import { StallStatus, ApplicationStatus, LineStatus, WarningLevel, StallType, InspectionResult, SuspensionStatus } from "@/types/enums";
+import { StallStatus, ApplicationStatus, ApplicationType, ApplicationTypeLabel, LineStatus, WarningLevel, StallType, InspectionResult, SuspensionStatus } from "@/types/enums";
 
 export function StallStatusBadge({ status, locked }: { status: StallStatus; locked?: boolean }) {
   const map: Record<StallStatus, { cls: string; label: string }> = {
@@ -8,6 +8,7 @@ export function StallStatusBadge({ status, locked }: { status: StallStatus; lock
     [StallStatus.CONNECTED]: { cls: "badge-connected", label: "已接电" },
     [StallStatus.SUSPENDED]: { cls: "badge-suspended", label: "已暂停" },
     [StallStatus.ABNORMAL]: { cls: "badge-abnormal", label: "异常" },
+    [StallStatus.LIMITED]: { cls: "badge-limited", label: "限电待整改" },
   };
   const item = map[status] || map[StallStatus.IDLE];
   return (
@@ -25,6 +26,7 @@ export function ApplicationStatusBadge({ status }: { status: ApplicationStatus }
     [ApplicationStatus.REJECTED]: { cls: "badge-rejected", label: "已驳回" },
     [ApplicationStatus.WITHDRAWN]: { cls: "badge-withdrawn", label: "已撤回" },
     [ApplicationStatus.CONNECTED]: { cls: "badge-connected", label: "已接电" },
+    [ApplicationStatus.PARTIALLY_APPROVED]: { cls: "badge-partial", label: "部分通过" },
   };
   const item = map[status] || map[ApplicationStatus.PENDING];
   return <span className={item.cls}>{item.label}</span>;
@@ -74,5 +76,14 @@ export function SuspensionStatusBadge({ status }: { status: SuspensionStatus }) 
     [SuspensionStatus.RESTORED]: { cls: "badge-connected", label: "已恢复" },
   };
   const item = map[status] || map[SuspensionStatus.RESTORED];
+  return <span className={item.cls}>{item.label}</span>;
+}
+
+export function ApplicationTypeBadge({ type }: { type: ApplicationType }) {
+  const map: Record<ApplicationType, { cls: string; label: string }> = {
+    [ApplicationType.STANDARD]: { cls: "badge-connected", label: ApplicationTypeLabel[ApplicationType.STANDARD] },
+    [ApplicationType.TEMPORARY_BOOST]: { cls: "badge-partial", label: ApplicationTypeLabel[ApplicationType.TEMPORARY_BOOST] },
+  };
+  const item = map[type] || map[ApplicationType.STANDARD];
   return <span className={item.cls}>{item.label}</span>;
 }

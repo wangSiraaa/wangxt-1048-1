@@ -32,6 +32,7 @@ import {
   StallStatusBadge,
   StallTypeBadge,
   SuspensionStatusBadge,
+  ApplicationTypeBadge,
 } from "@/components/common/StatusBadge";
 import CapacityCard, { buildBoxInfo } from "@/components/capacity/CapacityCard";
 import StallGrid from "@/components/stall/StallGrid";
@@ -41,6 +42,7 @@ import {
   InspectionResult,
   SuspensionStatus,
   WarningLevel,
+  ApplicationType,
   HIGH_LOAD_THRESHOLD,
 } from "@/types/enums";
 import { InspectionRecord, SuspensionRecord, Stall } from "@/types";
@@ -83,7 +85,7 @@ function InspectionInner() {
   const toast = useToast();
   const { stalls = [] } = useStallStore();
   const { boxes = [] } = useBoxStore();
-  const { inspections = [], suspensions = [], addInspection, suspendStall, restoreStall } =
+  const { inspections = [], suspensions = [], addInspection, suspendStall, limitStall, restoreStall } =
     useInspectionStore();
   const { applications = [] } = useApplicationStore();
   const { currentUserName = "系统用户" } = useAuthStore();
@@ -96,6 +98,8 @@ function InspectionInner() {
   const [suspendReason, setSuspendReason] = useState("");
   const [restoreStallId, setRestoreStallId] = useState<string | null>(null);
   const [restoreRemark, setRestoreRemark] = useState("");
+  const [limitStallId, setLimitStallId] = useState<string | null>(null);
+  const [limitReason, setLimitReason] = useState("");
 
   const [measuredLoad, setMeasuredLoad] = useState(0);
   const [selectedAbnormalities, setSelectedAbnormalities] = useState<string[]>([]);
@@ -108,6 +112,11 @@ function InspectionInner() {
 
   const suspendedStalls = useMemo(
     () => stalls.filter((s) => s.status === StallStatus.SUSPENDED),
+    [stalls]
+  );
+
+  const limitedStalls = useMemo(
+    () => stalls.filter((s) => s.status === StallStatus.LIMITED),
     [stalls]
   );
 
@@ -216,6 +225,34 @@ function InspectionInner() {
     }
   }
 
+  function handleConfirmLimit() {
+    if (!limitStallId) return;
+    const stall = stalls.find((s) => s.id === limitStallId);
+    if (!stall || stall.status !== StallStatus.CONNECTED) {
+      toast.error("该摊位状态不满足限电条件");
+      return;
+    }
+    if (!limitReason.trim()) {
+      toast.error("请填写限电原因");
+      return;
+    }
+    const lastInsp = [...inspections]
+      .filter((i) => i.stallId === limitStallId)
+      .sort((a, b) => String(b.inspectedAt || "").localeCompare(String(a.inspectedAt || "")))[0];
+    const id = limitStall(
+      limitStallId,
+      limitReason.trim(),
+      lastInsp?.id
+    );
+    if (id) {
+      toast.success("已对该摊位执行限电待整改");
+      setLimitStallId(null);
+      setLimitReason("");
+    } else {
+      toast.error("限电失败，状态不满足条件");
+    }
+  }
+
   function getStallBox(stallId: string) {
     const s = stalls.find((x) => x.id === stallId);
     return s ? boxes.find((b) => b.id === s.distributionBoxId) : undefined;
@@ -236,7 +273,7 @@ function InspectionInner() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
           <div className="stat-card bg-gradient-to-br from-green-50 to-white border-l-4 border-safe-success">
             <div className="text-2xl font-bold text-industrial-800">
               {connectedStalls.length}
@@ -248,6 +285,12 @@ function InspectionInner() {
               {suspendedStalls.length}
             </div>
             <div className="text-xs text-industrial-500 mt-1">已暂停摊位</div>
+          </div>
+          <div className="stat-card bg-gradient-to-br from-amber-50 to-white border-l-4 border-amber-400">
+            <div className="text-2xl font-bold text-industrial-800">
+              {limitedStalls.length}
+            </div>
+            <div className="text-xs text-industrial-500 mt-1">限电待整改</div>
           </div>
           <div className="stat-card bg-gradient-to-br from-orange-50 to-white border-l-4 border-orange-400">
             <div className="text-2xl font-bold text-industrial-800">
@@ -347,6 +390,9 @@ function InspectionInner() {
                     stall.ratedCapacity > 0
                       ? stall.occupiedCapacity / stall.ratedCapacity
                       : 0;
+                  const boostApp = applications.find(
+                    (a) => a.stallId === stall.id && a.status === "connected" && a.applicationType === ApplicationType.TEMPORARY_BOOST
+                  );
                   return (
                     <button
                       key={stall.id}
@@ -363,12 +409,14 @@ function InspectionInner() {
                     >
                       <div className="flex items-center justify-between">
                         <div>
-                          <div className="font-semibold text-industrial-800 text-sm">
+                          <div className="font-semibold text-industrial-800 text-sm flex items-center gap-2">
                             {stall.code} {stall.name}
+                            <StallStatusBadge status={stall.status} />
                           </div>
                           <div className="text-xs text-industrial-500 mt-0.5 flex items-center gap-2">
                             <span>{box?.code}</span>
                             <StallTypeBadge type={stall.stallType} />
+                            {boostApp && <ApplicationTypeBadge type={ApplicationType.TEMPORARY_BOOST} />}
                           </div>
                         </div>
                         <div className="text-right">
@@ -384,6 +432,11 @@ function InspectionInner() {
                             {formatKW(stall.occupiedCapacity)}/
                             {formatKW(stall.ratedCapacity)}
                           </div>
+                          {boostApp && boostApp.approvedBoostPower != null && (
+                            <div className="text-xs text-amber-600 mt-0.5">
+                              扩容: {formatKW(boostApp.approvedBoostPower)}
+                            </div>
+                          )}
                           {lastInsp && (
                             <div className="text-xs text-industrial-400 mt-0.5 flex items-center gap-1 justify-end">
                               <Clock size={10} />
@@ -392,6 +445,12 @@ function InspectionInner() {
                           )}
                         </div>
                       </div>
+                      {stall.status === StallStatus.LIMITED && (
+                        <div className="mt-2 p-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-700 flex items-center gap-1.5">
+                          <AlertTriangle size={12} className="shrink-0" />
+                          该摊位因超载已被限电，需整改后恢复
+                        </div>
+                      )}
                     </button>
                   );
                 })
@@ -409,6 +468,7 @@ function InspectionInner() {
           activeSuspensions={activeSuspensions}
           allSuspensions={suspensions}
           onSuspend={(id) => setSuspendStallId(id)}
+          onLimit={(id) => setLimitStallId(id)}
           onRestore={(id) => setRestoreStallId(id)}
           onViewSusp={(s) => setViewSusp(s)}
         />
@@ -426,6 +486,7 @@ function InspectionInner() {
         <InspectionFormModal
           stall={selectedStall}
           box={getStallBox(selectedStall.id)!}
+          applications={applications}
           measuredLoad={measuredLoad}
           setMeasuredLoad={setMeasuredLoad}
           abnormalities={selectedAbnormalities}
@@ -439,6 +500,10 @@ function InspectionInner() {
           onSubmit={handleSubmitInspection}
           onSuspend={() => {
             setSuspendStallId(selectedStall.id);
+            setSelectedStall(null);
+          }}
+          onLimit={() => {
+            setLimitStallId(selectedStall.id);
             setSelectedStall(null);
           }}
         />
@@ -467,6 +532,19 @@ function InspectionInner() {
             setRestoreRemark("");
           }}
           onConfirm={handleConfirmRestore}
+        />
+      )}
+
+      {limitStallId && (
+        <LimitModal
+          stall={stalls.find((s) => s.id === limitStallId)!}
+          reason={limitReason}
+          setReason={setLimitReason}
+          onCancel={() => {
+            setLimitStallId(null);
+            setLimitReason("");
+          }}
+          onConfirm={handleConfirmLimit}
         />
       )}
 
@@ -501,6 +579,7 @@ function AbnormalTab({
   activeSuspensions,
   allSuspensions,
   onSuspend,
+  onLimit,
   onRestore,
   onViewSusp,
 }: {
@@ -510,6 +589,7 @@ function AbnormalTab({
   activeSuspensions: SuspensionRecord[];
   allSuspensions: SuspensionRecord[];
   onSuspend: (id: string) => void;
+  onLimit: (id: string) => void;
   onRestore: (id: string) => void;
   onViewSusp: (s: SuspensionRecord) => void;
 }) {
@@ -563,7 +643,10 @@ function AbnormalTab({
                     <tr key={s.id}>
                       <td>
                         <div className="font-medium">{stall?.code}</div>
-                        {stall && <StallTypeBadge type={stall.stallType} />}
+                        <div className="flex items-center gap-1 mt-0.5">
+                          {stall && <StallTypeBadge type={stall.stallType} />}
+                          {stall && <StallStatusBadge status={stall.status} />}
+                        </div>
                       </td>
                       <td>{app?.merchantName || "-"}</td>
                       <td>
@@ -613,12 +696,12 @@ function AbnormalTab({
         <div className="card p-5">
           <h3 className="text-sm font-semibold text-industrial-700 mb-4 flex items-center gap-2">
             <AlertTriangle size={16} className="text-safe-danger" />
-            建议立即暂停（高负载摊位）
+            建议立即处理（高负载摊位）
           </h3>
           {connectedStalls.filter((s) => {
             const rate = s.ratedCapacity > 0 ? s.occupiedCapacity / s.ratedCapacity : 0;
             return rate > HIGH_LOAD_THRESHOLD;
-          }).length === 0 ? (
+          }).length === 0 && stalls.filter((s) => s.status === StallStatus.LIMITED).length === 0 ? (
             <div className="text-center py-6 text-industrial-400 text-sm">
               所有摊位负载正常
             </div>
@@ -640,6 +723,11 @@ function AbnormalTab({
                   const app = applications.find(
                     (a) => a.stallId === stall.id && a.status === "connected"
                   );
+                  const boostApp = applications.find(
+                    (a) => a.stallId === stall.id && a.status === "connected" && a.applicationType === ApplicationType.TEMPORARY_BOOST
+                  );
+                  const approvedPower = boostApp?.approvedBoostPower ?? boostApp?.peakPower;
+                  const isBoostOverloaded = boostApp && approvedPower != null && stall.occupiedCapacity > approvedPower;
                   return (
                     <div
                       key={stall.id}
@@ -647,21 +735,52 @@ function AbnormalTab({
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div>
-                          <div className="font-semibold text-industrial-800">
+                          <div className="font-semibold text-industrial-800 flex items-center gap-2">
                             {stall.code} {stall.name}
+                            <StallStatusBadge status={stall.status} />
                           </div>
                           <div className="text-xs text-industrial-500">
                             {app?.merchantName || "-"}
+                            {boostApp && (
+                              <span className="ml-2">
+                                <ApplicationTypeBadge type={ApplicationType.TEMPORARY_BOOST} />
+                              </span>
+                            )}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => onSuspend(stall.id)}
-                          className="btn-danger text-xs"
-                        >
-                          <PauseCircle size={14} /> 立即暂停
-                        </button>
+                        <div className="flex gap-2">
+                          {isBoostOverloaded && (
+                            <button
+                              type="button"
+                              onClick={() => onLimit(stall.id)}
+                              className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-medium flex items-center gap-1 transition-colors"
+                            >
+                              <AlertTriangle size={14} /> 限电待整改
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => onSuspend(stall.id)}
+                            className="btn-danger text-xs"
+                          >
+                            <PauseCircle size={14} /> 立即暂停
+                          </button>
+                        </div>
                       </div>
+                      {boostApp && approvedPower != null && (
+                        <div className="mb-2 p-2 rounded bg-amber-50 border border-amber-200">
+                          <div className="text-xs text-industrial-600 flex items-center justify-between">
+                            <span>审批扩容功率: <b>{formatKW(approvedPower)}</b></span>
+                            <span>实际占用: <b>{formatKW(stall.occupiedCapacity)}</b></span>
+                          </div>
+                          {isBoostOverloaded && (
+                            <div className="text-xs text-amber-700 mt-1 flex items-center gap-1">
+                              <AlertTriangle size={12} className="shrink-0" />
+                              实测负载 {formatKW(stall.occupiedCapacity)} &gt; 审批功率 {formatKW(approvedPower)}，建议限电
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="progress-bar">
                         <div
                           className="progress-fill bg-safe-danger"
@@ -676,6 +795,50 @@ function AbnormalTab({
                         <span className="text-safe-danger font-semibold">
                           {(rate * 100).toFixed(0)}%
                         </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              {stalls
+                .filter((s) => s.status === StallStatus.LIMITED)
+                .map((stall) => {
+                  const app = applications.find(
+                    (a) => a.stallId === stall.id && a.status === "connected"
+                  );
+                  const boostApp = applications.find(
+                    (a) => a.stallId === stall.id && a.applicationType === ApplicationType.TEMPORARY_BOOST
+                  );
+                  return (
+                    <div
+                      key={stall.id}
+                      className="p-3 rounded-lg border border-amber-200 bg-amber-50/50"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <div className="font-semibold text-industrial-800 flex items-center gap-2">
+                            {stall.code} {stall.name}
+                            <StallStatusBadge status={stall.status} />
+                          </div>
+                          <div className="text-xs text-industrial-500">
+                            {app?.merchantName || "-"}
+                            {boostApp && (
+                              <span className="ml-2">
+                                <ApplicationTypeBadge type={ApplicationType.TEMPORARY_BOOST} />
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onRestore(stall.id)}
+                          className="btn-success text-xs"
+                        >
+                          <PlayCircle size={14} /> 恢复供电
+                        </button>
+                      </div>
+                      <div className="p-2 rounded bg-amber-100/50 border border-amber-200 text-xs text-amber-700 flex items-center gap-1.5">
+                        <AlertTriangle size={12} className="shrink-0" />
+                        该摊位因超载已被限电，需整改后恢复
                       </div>
                     </div>
                   );
@@ -701,6 +864,13 @@ function AbnormalTab({
                   (s) => s.stallId === i.stallId
                 );
                 const canSuspend = stall?.status === StallStatus.CONNECTED;
+                const canLimit = canSuspend && (() => {
+                  const boostApp = applications.find(
+                    (a) => a.stallId === i.stallId && a.status === "connected" && a.applicationType === ApplicationType.TEMPORARY_BOOST
+                  );
+                  const approvedPower = boostApp?.approvedBoostPower ?? boostApp?.peakPower;
+                  return boostApp && approvedPower != null && i.measuredLoad > approvedPower;
+                })();
                 return (
                   <div
                     key={i.id}
@@ -715,16 +885,30 @@ function AbnormalTab({
                         {isSuspended && (
                           <SuspensionStatusBadge status={SuspensionStatus.SUSPENDED} />
                         )}
+                        {stall?.status === StallStatus.LIMITED && (
+                          <StallStatusBadge status={StallStatus.LIMITED} />
+                        )}
                       </div>
-                      {canSuspend && !isSuspended && (
-                        <button
-                          type="button"
-                          onClick={() => onSuspend(i.stallId)}
-                          className="btn-danger text-xs"
-                        >
-                          <PauseCircle size={12} /> 暂停
-                        </button>
-                      )}
+                      <div className="flex gap-2">
+                        {canLimit && !isSuspended && (
+                          <button
+                            type="button"
+                            onClick={() => onLimit(i.stallId)}
+                            className="text-xs px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-medium flex items-center gap-1 transition-colors"
+                          >
+                            <AlertTriangle size={12} /> 限电
+                          </button>
+                        )}
+                        {canSuspend && !isSuspended && stall?.status !== StallStatus.LIMITED && (
+                          <button
+                            type="button"
+                            onClick={() => onSuspend(i.stallId)}
+                            className="btn-danger text-xs"
+                          >
+                            <PauseCircle size={12} /> 暂停
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="text-xs text-industrial-500 mb-1 flex items-center gap-2">
                       <User size={12} /> {i.inspectorName}
@@ -881,6 +1065,7 @@ function HistoryTab({
 function InspectionFormModal({
   stall,
   box,
+  applications,
   measuredLoad,
   setMeasuredLoad,
   abnormalities,
@@ -890,9 +1075,11 @@ function InspectionFormModal({
   onCancel,
   onSubmit,
   onSuspend,
+  onLimit,
 }: {
   stall: Stall;
   box: any;
+  applications: any[];
   measuredLoad: number;
   setMeasuredLoad: (n: number) => void;
   abnormalities: string[];
@@ -902,11 +1089,18 @@ function InspectionFormModal({
   onCancel: () => void;
   onSubmit: () => void;
   onSuspend: () => void;
+  onLimit: () => void;
 }) {
   const isOverload = measuredLoad > stall.ratedCapacity * HIGH_LOAD_THRESHOLD;
   const isAbnormal = isOverload || abnormalities.length > 0;
   const rate =
     stall.ratedCapacity > 0 ? measuredLoad / stall.ratedCapacity : 0;
+
+  const boostApp = applications?.find(
+    (a: any) => a.stallId === stall.id && a.status === "connected" && a.applicationType === ApplicationType.TEMPORARY_BOOST
+  );
+  const approvedPower = boostApp?.approvedBoostPower ?? boostApp?.peakPower;
+  const isBoostOverloaded = boostApp && approvedPower != null && measuredLoad > 0 && measuredLoad > approvedPower;
 
   function toggleAbnormality(v: string) {
     if (abnormalities.includes(v)) {
@@ -928,7 +1122,10 @@ function InspectionFormModal({
             <div className="text-xs text-industrial-500 mb-1">摊位信息</div>
             <div className="input bg-industrial-50 flex items-center justify-between">
               <span>{stall.code}</span>
-              <StallTypeBadge type={stall.stallType} />
+              <div className="flex items-center gap-1">
+                <StallTypeBadge type={stall.stallType} />
+                <StallStatusBadge status={stall.status} />
+              </div>
             </div>
           </div>
           <div>
@@ -940,11 +1137,30 @@ function InspectionFormModal({
           </div>
           <div>
             <div className="text-xs text-industrial-500 mb-1">摊位额定容量</div>
-            <div className="input bg-industrial-50 font-semibold">
-              {formatKW(stall.ratedCapacity)}
+            <div className="input bg-industrial-50 font-semibold flex items-center justify-between">
+              <span>{formatKW(stall.ratedCapacity)}</span>
+              {boostApp && <ApplicationTypeBadge type={ApplicationType.TEMPORARY_BOOST} />}
             </div>
           </div>
         </div>
+
+        {boostApp && approvedPower != null && (
+          <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+            <div className="text-xs text-amber-700 font-semibold mb-1 flex items-center gap-1">
+              <Activity size={12} /> 临时扩容信息
+            </div>
+            <div className="flex items-center gap-4 text-xs text-industrial-600">
+              <span>审批扩容功率: <b className="text-amber-700">{formatKW(approvedPower)}</b></span>
+              <span>额定容量: <b>{formatKW(stall.ratedCapacity)}</b></span>
+            </div>
+            {isBoostOverloaded && measuredLoad > 0 && (
+              <div className="mt-2 p-2 rounded bg-red-50 border border-red-200 text-xs text-safe-danger flex items-center gap-1.5">
+                <AlertTriangle size={14} className="shrink-0" />
+                实测负载 {formatKW(measuredLoad)} &gt; 审批功率 {formatKW(approvedPower)}，建议限电
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="p-4 bg-gradient-to-r from-blue-50 to-white border border-blue-100 rounded-lg">
           <div className="label-required flex items-center gap-1 mb-2">
@@ -1065,13 +1281,27 @@ function InspectionFormModal({
                   <b>{(rate * 100).toFixed(1)}%</b> 阈值 {HIGH_LOAD_THRESHOLD * 100}%）
                 </li>
               )}
+              {isBoostOverloaded && (
+                <li>
+                  临时扩容超载（实测 <b>{formatKW(measuredLoad)}</b> &gt; 审批 <b>{formatKW(approvedPower!)}</b>）
+                </li>
+              )}
               {abnormalities.length > 0 && (
                 <li>
                   <b>{abnormalities.length}</b> 项现场安全隐患
                 </li>
               )}
             </ul>
-            <div className="pt-2 flex justify-end">
+            <div className="pt-2 flex justify-end gap-2">
+              {isBoostOverloaded && (
+                <button
+                  type="button"
+                  onClick={onLimit}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-medium flex items-center gap-1 transition-colors"
+                >
+                  <AlertTriangle size={14} /> 限电待整改
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onSuspend}
@@ -1192,6 +1422,87 @@ function SuspendModal({
             className="btn-danger"
           >
             <PauseCircle size={16} /> 确认暂停
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function LimitModal({
+  stall,
+  reason,
+  setReason,
+  onCancel,
+  onConfirm,
+}: {
+  stall: Stall;
+  reason: string;
+  setReason: (s: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const presets = [
+    "临时扩容超载，实测功率超过审批值",
+    "用电超载，需整改后降低负载",
+    "扩容期满未降载，限电待整改",
+  ];
+  return (
+    <Modal
+      title={`限电待整改 - ${stall.code}`}
+      size="md"
+      onClose={onCancel}
+    >
+      <div className="space-y-4">
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg space-y-1">
+          <div className="flex items-center gap-2 text-amber-600 font-semibold">
+            <AlertTriangle size={18} /> 限电待整改
+          </div>
+          <p className="text-sm text-industrial-700">
+            该摊位将进入限电待整改状态，商户需降低负载或完成整改后由巡检员确认方可恢复正常供电。
+          </p>
+        </div>
+
+        <div>
+          <div className="label-required flex items-center gap-1">
+            <Activity size={14} /> 限电原因
+          </div>
+          <textarea
+            className="textarea"
+            rows={3}
+            placeholder="请详细说明限电的原因和依据..."
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <div className="text-xs text-industrial-500 mb-2">快捷填入：</div>
+          <div className="flex flex-wrap gap-1">
+            {presets.map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setReason(p)}
+                className="text-xs px-2 py-1 rounded-full border border-amber-200 hover:bg-amber-50 text-amber-700"
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-2">
+          <button type="button" onClick={onCancel} className="btn-secondary">
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={!reason.trim()}
+            className="text-sm px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <AlertTriangle size={16} /> 确认限电
           </button>
         </div>
       </div>

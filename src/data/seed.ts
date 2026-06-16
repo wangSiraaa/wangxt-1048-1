@@ -12,6 +12,7 @@ import {
   StallStatus,
   StallType,
   ApplicationStatus,
+  ApplicationType,
   InspectionResult,
   SuspensionStatus,
 } from "@/types/enums";
@@ -93,6 +94,7 @@ export const seedStalls: Stall[] = stallDefs.map((d, idx) => ({
 seedStalls[0].status = StallStatus.CONNECTED;
 seedStalls[0].occupiedCapacity = 6.5;
 seedStalls[0].locked = true;
+seedStalls[0].adjacentStallIds = [seedStalls[1].id, seedStalls[2].id];
 
 seedStalls[3].status = StallStatus.APPLYING;
 seedStalls[3].occupiedCapacity = 0;
@@ -100,10 +102,12 @@ seedStalls[3].occupiedCapacity = 0;
 seedStalls[7].status = StallStatus.CONNECTED;
 seedStalls[7].occupiedCapacity = 7.2;
 seedStalls[7].locked = true;
+seedStalls[7].adjacentStallIds = [seedStalls[8].id, seedStalls[9].id];
 
 seedStalls[10].status = StallStatus.CONNECTED;
 seedStalls[10].occupiedCapacity = 10.5;
 seedStalls[10].locked = true;
+seedStalls[10].adjacentStallIds = [seedStalls[11].id];
 
 seedStalls[13].status = StallStatus.SUSPENDED;
 seedStalls[13].occupiedCapacity = 9.0;
@@ -133,6 +137,7 @@ export const seedApplications: ElectricityApplication[] = [
     activityPeriod: "周末10:00-22:00",
     requirementDesc: "制冰机、封口机、冷柜连续使用",
     status: ApplicationStatus.PENDING,
+    applicationType: ApplicationType.STANDARD,
     createdAt: H,
     devices: makeDevices([
       ["制冰机", 1, 3.5],
@@ -151,6 +156,7 @@ export const seedApplications: ElectricityApplication[] = [
     activityPeriod: "全周14:00-21:00",
     requirementDesc: "展示柜灯光和收银设备",
     status: ApplicationStatus.APPROVED,
+    applicationType: ApplicationType.STANDARD,
     approverName: "李运营",
     approvalOpinion: "容量充足，同意接入",
     approvedAt: H,
@@ -160,6 +166,27 @@ export const seedApplications: ElectricityApplication[] = [
       ["收银机", 1, 0.3],
       ["空调扇", 1, 0.8],
     ]).map((d) => ({ ...d, applicationId: "app_002" })),
+  },
+  {
+    id: "app_003",
+    stallId: seedStalls[0].id,
+    merchantName: "张记手作奶茶",
+    contactInfo: "13800138001",
+    isFoodStall: true,
+    foodLicenseNo: "JY13101010012345",
+    peakPower: 5.0,
+    activityPeriod: "中秋节当天 10:00-22:00",
+    requirementDesc: "节庆临时增加电炸锅和烤箱",
+    notes: "中秋节高峰期，需额外功率用于热食制作",
+    status: ApplicationStatus.PENDING,
+    applicationType: ApplicationType.TEMPORARY_BOOST,
+    originalPower: seedStalls[0].occupiedCapacity,
+    createdAt: H,
+    devices: makeDevices([
+      ["电炸锅", 1, 2.5],
+      ["烤箱", 1, 1.8],
+      ["保温灯", 1, 0.5],
+    ]).map((d) => ({ ...d, applicationId: "app_003" })),
   },
 ];
 

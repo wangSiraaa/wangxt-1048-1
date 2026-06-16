@@ -17,6 +17,11 @@ interface InspectionState {
     reason: string,
     inspectionRecordId?: string
   ) => string | null;
+  limitStall: (
+    stallId: string,
+    reason: string,
+    inspectionRecordId?: string
+  ) => string | null;
   restoreStall: (stallId: string, remark?: string) => boolean;
   reset: () => void;
 }
@@ -59,11 +64,33 @@ export const useInspectionStore = create<InspectionState>()(
         useStallStore.getState().setStatus(stallId, StallStatus.SUSPENDED);
         return id;
       },
+      limitStall: (stallId, reason, inspectionRecordId) => {
+        const stall = useStallStore.getState().stalls.find((s) => s.id === stallId);
+        if (!stall || stall.status !== StallStatus.CONNECTED) return null;
+        const { currentUserName } = useAuthStore.getState();
+        const id = genId("susp");
+        set((s) => ({
+          suspensions: [
+            ...s.suspensions,
+            {
+              id,
+              stallId,
+              inspectionRecordId,
+              reason,
+              operatorName: currentUserName,
+              status: SuspensionStatus.SUSPENDED,
+              suspendedAt: nowISO(),
+            },
+          ],
+        }));
+        useStallStore.getState().setStatus(stallId, StallStatus.LIMITED);
+        return id;
+      },
       restoreStall: (stallId, remark) => {
         const { currentUserName } = useAuthStore.getState();
         const s = get();
         const stall = useStallStore.getState().stalls.find((st) => st.id === stallId);
-        if (!stall || stall.status !== StallStatus.SUSPENDED) return false;
+        if (!stall || (stall.status !== StallStatus.SUSPENDED && stall.status !== StallStatus.LIMITED)) return false;
         set((state) => ({
           suspensions: state.suspensions
             .sort((a, b) => String(b.suspendedAt || "").localeCompare(String(a.suspendedAt || "")))

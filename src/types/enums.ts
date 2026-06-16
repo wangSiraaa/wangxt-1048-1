@@ -18,6 +18,7 @@ export enum StallStatus {
   CONNECTED = "connected",
   SUSPENDED = "suspended",
   ABNORMAL = "abnormal",
+  LIMITED = "limited",
 }
 
 export const StallStatusLabel: Record<StallStatus, string> = {
@@ -26,6 +27,7 @@ export const StallStatusLabel: Record<StallStatus, string> = {
   [StallStatus.CONNECTED]: "已接电",
   [StallStatus.SUSPENDED]: "已暂停",
   [StallStatus.ABNORMAL]: "异常",
+  [StallStatus.LIMITED]: "限电待整改",
 };
 
 export enum ApplicationStatus {
@@ -34,6 +36,7 @@ export enum ApplicationStatus {
   REJECTED = "rejected",
   WITHDRAWN = "withdrawn",
   CONNECTED = "connected",
+  PARTIALLY_APPROVED = "partially_approved",
 }
 
 export const ApplicationStatusLabel: Record<ApplicationStatus, string> = {
@@ -42,6 +45,17 @@ export const ApplicationStatusLabel: Record<ApplicationStatus, string> = {
   [ApplicationStatus.REJECTED]: "已驳回",
   [ApplicationStatus.WITHDRAWN]: "已撤回",
   [ApplicationStatus.CONNECTED]: "已接电",
+  [ApplicationStatus.PARTIALLY_APPROVED]: "部分通过",
+};
+
+export enum ApplicationType {
+  STANDARD = "standard",
+  TEMPORARY_BOOST = "temporary_boost",
+}
+
+export const ApplicationTypeLabel: Record<ApplicationType, string> = {
+  [ApplicationType.STANDARD]: "标准申请",
+  [ApplicationType.TEMPORARY_BOOST]: "临时扩容",
 };
 
 export enum StallType {

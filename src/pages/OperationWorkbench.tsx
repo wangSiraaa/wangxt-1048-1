@@ -14,6 +14,8 @@ import {
   Eye,
   RotateCcw,
   Lock,
+  TrendingUp,
+  AlertTriangle,
 } from "lucide-react";
 import { useBoxStore } from "@/store/useBoxStore";
 import { useStallStore } from "@/store/useStallStore";
@@ -23,8 +25,10 @@ import { useToast } from "@/components/common/Toast";
 import Modal from "@/components/common/Modal";
 import StallGrid from "@/components/stall/StallGrid";
 import CapacityCard, { buildBoxInfo } from "@/components/capacity/CapacityCard";
+import CapacityBreakdownPanel from "@/components/capacity/CapacityBreakdownPanel";
 import {
   ApplicationStatusBadge,
+  ApplicationTypeBadge,
   LineStatusBadge,
   StallStatusBadge,
   StallTypeBadge,
@@ -36,10 +40,12 @@ import {
   LineStatus,
   LineStatusLabel,
   ApplicationStatus,
+  ApplicationType,
+  ApplicationTypeLabel,
   StallStatus,
 } from "@/types/enums";
-import { Stall, DistributionBox } from "@/types";
-import { formatKW } from "@/utils/capacity";
+import { Stall, DistributionBox, CapacityBreakdown } from "@/types";
+import { formatKW, buildCapacityBreakdown, checkDuplicateHighPowerDevices } from "@/utils/capacity";
 import { formatDateTime, formatDate } from "@/utils/time";
 import DeviceListEditor, { DeviceRow, createEmptyRow } from "@/components/form/DeviceListEditor";
 import { genId } from "@/utils/id";
@@ -672,24 +678,39 @@ function BoxFormModal({ title, initial, onClose, onSubmit, submitLabel }: {
 }
 
 function ApprovalsPanel() {
-  const { applications = [], approve, reject } = useApplicationStore();
+  const { applications = [], approve, reject, partialApprove } = useApplicationStore();
   const { stalls = [] } = useStallStore();
   const { boxes = [] } = useBoxStore();
   const toast = useToast();
   const [filter, setFilter] = useState<"all" | ApplicationStatus>("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | ApplicationType>("all");
   const [viewing, setViewing] = useState<string | null>(null);
+  const [partialApproveId, setPartialApproveId] = useState<string | null>(null);
 
   const list = useMemo(() => {
     const l = [...applications].sort((a, b) =>
       String(b.createdAt || "").localeCompare(String(a.createdAt || ""))
     );
-    if (filter === "all") return l;
-    return l.filter((a) => a.status === filter);
-  }, [applications, filter]);
+    let filtered = l;
+    if (filter !== "all") filtered = filtered.filter((a) => a.status === filter);
+    if (typeFilter !== "all") filtered = filtered.filter((a) => a.applicationType === typeFilter);
+    return filtered;
+  }, [applications, filter, typeFilter]);
+
+  const getBreakdownForApp = (a: any): CapacityBreakdown | null => {
+    const stall = stalls.find((s) => s.id === a.stallId);
+    if (!stall) return null;
+    const box = boxes.find((b) => b.id === stall.distributionBoxId);
+    if (!box) return null;
+    return buildCapacityBreakdown(box, stalls, a.peakPower, a.stallId, applications);
+  };
 
   const doApprove = (id: string) => {
+    const app = applications.find((a) => a.id === id);
+    if (!app) return;
+    const breakdown = getBreakdownForApp(app);
     try {
-      approve(id);
+      approve(id, undefined, breakdown || undefined);
       toast.success("已通过申请");
     } catch (e: any) {
       toast.error(e?.message || "审批失败");
@@ -707,35 +728,71 @@ function ApprovalsPanel() {
     }
   };
 
+  const doPartialApprove = (id: string, approvedPower: number, breakdown: CapacityBreakdown, opinion?: string) => {
+    try {
+      partialApprove(id, approvedPower, breakdown, opinion);
+      toast.success(`已部分通过，审批功率 ${formatKW(approvedPower)} kW`);
+      setPartialApproveId(null);
+    } catch (e: any) {
+      toast.error(e?.message || "部分审批失败");
+    }
+  };
+
   const viewingApp = applications.find((a) => a.id === viewing);
+  const partialApp = applications.find((a) => a.id === partialApproveId);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3 justify-between">
-        <div className="flex items-center gap-2 bg-white rounded-lg border border-industrial-200 p-1">
-          {(
-            [
-              ["all", "全部"],
-              [ApplicationStatus.PENDING, "待审批"],
-              [ApplicationStatus.APPROVED, "已通过"],
-              [ApplicationStatus.REJECTED, "已驳回"],
-              [ApplicationStatus.WITHDRAWN, "已撤回"],
-              [ApplicationStatus.CONNECTED, "已接电"],
-            ] as const
-          ).map(([k, v]) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setFilter(k as any)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
-                filter === k
-                  ? "bg-industrial-700 text-white"
-                  : "text-industrial-600 hover:bg-industrial-50"
-              }`}
-            >
-              {v}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 bg-white rounded-lg border border-industrial-200 p-1">
+            {(
+              [
+                ["all", "全部状态"],
+                [ApplicationStatus.PENDING, "待审批"],
+                [ApplicationStatus.APPROVED, "已通过"],
+                [ApplicationStatus.PARTIALLY_APPROVED, "部分通过"],
+                [ApplicationStatus.REJECTED, "已驳回"],
+                [ApplicationStatus.WITHDRAWN, "已撤回"],
+                [ApplicationStatus.CONNECTED, "已接电"],
+              ] as const
+            ).map(([k, v]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setFilter(k as any)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  filter === k
+                    ? "bg-industrial-700 text-white"
+                    : "text-industrial-600 hover:bg-industrial-50"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1 bg-white rounded-lg border border-industrial-200 p-1">
+            {(
+              [
+                ["all", "全部类型"],
+                [ApplicationType.STANDARD, "标准"],
+                [ApplicationType.TEMPORARY_BOOST, "临时扩容"],
+              ] as const
+            ).map(([k, v]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setTypeFilter(k as any)}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  typeFilter === k
+                    ? "bg-industrial-700 text-white"
+                    : "text-industrial-600 hover:bg-industrial-50"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="text-sm text-industrial-500">
           共 <span className="font-mono font-semibold text-industrial-800">{list.length}</span> 条
@@ -748,6 +805,7 @@ function ApprovalsPanel() {
             <thead>
               <tr>
                 <th>申请单号</th>
+                <th>类型</th>
                 <th>摊位</th>
                 <th>商户</th>
                 <th>峰值功率</th>
@@ -761,19 +819,45 @@ function ApprovalsPanel() {
             <tbody>
               {list.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-industrial-400">
+                  <td colSpan={10} className="py-12 text-center text-industrial-400">
                     暂无数据
                   </td>
                 </tr>
               ) : (
                 list.map((a) => {
                   const stall = stalls.find((s) => s.id === a.stallId);
+                  const isTempBoost = a.applicationType === ApplicationType.TEMPORARY_BOOST;
+                  const duplicateWarnings = isTempBoost
+                    ? checkDuplicateHighPowerDevices(a.stallId, a.devices, applications, stalls)
+                    : [];
                   return (
                     <tr key={a.id}>
                       <td className="font-mono text-xs">{a.id.slice(-8)}</td>
+                      <td>
+                        <div className="flex items-center gap-1">
+                          <ApplicationTypeBadge type={a.applicationType} />
+                          {isTempBoost && a.status === ApplicationStatus.PENDING && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-700 border border-amber-200">
+                              <TrendingUp size={10} /> 快速审批
+                            </span>
+                          )}
+                          {duplicateWarnings.length > 0 && (
+                            <span className="inline-flex items-center" title={duplicateWarnings.join("；")}>
+                              <AlertTriangle size={12} className="text-amber-500" />
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="font-mono font-semibold">{stall?.code || "-"}</td>
                       <td>{a.merchantName}</td>
-                      <td className="font-mono text-right">{formatKW(a.peakPower)}</td>
+                      <td className="font-mono text-right">
+                        {formatKW(a.peakPower)}
+                        {isTempBoost && a.originalPower != null && (
+                          <span className="text-[10px] text-industrial-400 ml-1">
+                            (原{formatKW(a.originalPower)}+扩{formatKW(a.peakPower - a.originalPower)})
+                          </span>
+                        )}
+                      </td>
                       <td className="text-center">{a.devices.length}</td>
                       <td>{a.isFoodStall || stall?.stallType === StallType.FOOD ? "🍜 是" : "否"}</td>
                       <td className="text-xs text-industrial-500">{formatDateTime(a.createdAt)}</td>
@@ -790,7 +874,7 @@ function ApprovalsPanel() {
                           >
                             <Eye size={14} />
                           </button>
-                          {a.status === ApplicationStatus.PENDING && (
+                          {a.status === ApplicationStatus.PENDING && !isTempBoost && (
                             <>
                               <button
                                 type="button"
@@ -799,6 +883,34 @@ function ApprovalsPanel() {
                                 title="通过"
                               >
                                 <Check size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-ghost p-2 hover:!bg-red-50 hover:!text-safe-danger"
+                                onClick={() => doReject(a.id)}
+                                title="驳回"
+                              >
+                                <XCircle size={14} />
+                              </button>
+                            </>
+                          )}
+                          {a.status === ApplicationStatus.PENDING && isTempBoost && (
+                            <>
+                              <button
+                                type="button"
+                                className="btn-ghost p-2 hover:!bg-emerald-50 hover:!text-safe-normal"
+                                onClick={() => doApprove(a.id)}
+                                title="全额通过"
+                              >
+                                <Check size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-ghost p-2 hover:!bg-blue-50 hover:!text-blue-600"
+                                onClick={() => setPartialApproveId(a.id)}
+                                title="部分通过"
+                              >
+                                <TrendingUp size={14} />
                               </button>
                               <button
                                 type="button"
@@ -832,7 +944,27 @@ function ApprovalsPanel() {
                 stalls.find((s) => s.id === viewingApp.stallId)?.distributionBoxId
             )
           }
+          breakdown={viewingApp.capacityBreakdown || getBreakdownForApp(viewingApp)}
           onClose={() => setViewing(null)}
+        />
+      )}
+
+      {partialApp && (
+        <PartialApproveModal
+          app={partialApp}
+          stall={stalls.find((s) => s.id === partialApp.stallId)}
+          box={
+            boxes.find(
+              (b) =>
+                b.id ===
+                stalls.find((s) => s.id === partialApp.stallId)?.distributionBoxId
+            )
+          }
+          breakdown={getBreakdownForApp(partialApp)}
+          onConfirm={(approvedPower, breakdown, opinion) =>
+            doPartialApprove(partialApp.id, approvedPower, breakdown, opinion)
+          }
+          onClose={() => setPartialApproveId(null)}
         />
       )}
     </div>
@@ -843,19 +975,26 @@ function ApplicationDetailModal({
   app,
   stall,
   box,
+  breakdown,
   onClose,
 }: {
   app: any;
   stall?: Stall;
   box?: DistributionBox;
+  breakdown?: CapacityBreakdown | null;
   onClose: () => void;
 }) {
+  const isTempBoost = app.applicationType === ApplicationType.TEMPORARY_BOOST;
+
   return (
     <Modal open onClose={onClose} title={`申请详情 ${app.id.slice(-12)}`} size="lg">
       <div className="space-y-5">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <InfoCell label="申请状态">
-            <ApplicationStatusBadge status={app.status} />
+            <div className="flex items-center gap-1.5">
+              <ApplicationStatusBadge status={app.status} />
+              <ApplicationTypeBadge type={app.applicationType} />
+            </div>
           </InfoCell>
           <InfoCell label="摊位">
             <span className="font-mono font-semibold">{stall?.code || "-"}</span>
@@ -869,6 +1008,38 @@ function ApplicationDetailModal({
             </span>
           </InfoCell>
         </div>
+
+        {isTempBoost && (
+          <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp size={16} className="text-amber-600" />
+              <span className="text-sm font-semibold text-amber-800">临时扩容功率对比</span>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="text-center">
+                <div className="text-xs text-amber-600 mb-1">原功率</div>
+                <div className="font-mono font-bold text-industrial-800">
+                  {formatKW(app.originalPower || 0)} kW
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-amber-600 mb-1">
+                  {app.approvedBoostPower != null ? "审批通过扩容" : "申请扩容"}
+                </div>
+                <div className="font-mono font-bold text-amber-700">
+                  +{formatKW(app.approvedBoostPower != null ? app.approvedBoostPower : app.peakPower - (app.originalPower || 0))} kW
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-amber-600 mb-1">峰值合计</div>
+                <div className="font-mono font-bold text-industrial-800">
+                  {formatKW(app.approvedBoostPower != null ? (app.originalPower || 0) + app.approvedBoostPower : app.peakPower)} kW
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid md:grid-cols-2 gap-4">
           <InfoCell label="商户名称">{app.merchantName}</InfoCell>
           <InfoCell label="是否食品摊位">
@@ -914,10 +1085,11 @@ function ApplicationDetailModal({
             </table>
           </div>
         </div>
-        {(app.rejectReason || app.approveRemark) && (
+        {breakdown && <CapacityBreakdownPanel breakdown={breakdown} />}
+        {(app.rejectReason || app.approveRemark || app.approvalOpinion) && (
           <div className="grid md:grid-cols-2 gap-4">
-            {app.approveRemark && (
-              <InfoCell label="审批备注">{app.approveRemark}</InfoCell>
+            {(app.approveRemark || app.approvalOpinion) && (
+              <InfoCell label="审批备注">{app.approveRemark || app.approvalOpinion}</InfoCell>
             )}
             {app.rejectReason && (
               <InfoCell label="驳回原因">
@@ -926,6 +1098,136 @@ function ApplicationDetailModal({
             )}
           </div>
         )}
+      </div>
+    </Modal>
+  );
+}
+
+function PartialApproveModal({
+  app,
+  stall,
+  box,
+  breakdown,
+  onConfirm,
+  onClose,
+}: {
+  app: any;
+  stall?: Stall;
+  box?: DistributionBox;
+  breakdown: CapacityBreakdown | null;
+  onConfirm: (approvedPower: number, breakdown: CapacityBreakdown, opinion?: string) => void;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const maxApprovable = breakdown?.maxApprovable ?? app.peakPower;
+  const [approvedPower, setApprovedPower] = useState<number>(maxApprovable);
+  const [opinion, setOpinion] = useState("");
+
+  const isTempBoost = app.applicationType === ApplicationType.TEMPORARY_BOOST;
+  const originalPower = app.originalPower || 0;
+  const totalPower = isTempBoost ? originalPower + approvedPower : approvedPower;
+
+  const canSubmit = approvedPower > 0 && approvedPower <= maxApprovable;
+
+  const handleSubmit = () => {
+    if (!canSubmit) {
+      toast.error("审批功率需大于 0 且不超过最大可审批功率");
+      return;
+    }
+    if (!breakdown) {
+      toast.error("无法获取容量分析数据");
+      return;
+    }
+    onConfirm(approvedPower, breakdown, opinion || undefined);
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`部分审批 - ${app.id.slice(-8)}`}
+      size="lg"
+      footer={
+        <>
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            <X size={14} /> 取消
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!canSubmit}
+            onClick={handleSubmit}
+          >
+            <Check size={14} /> 确认部分通过
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <InfoCell label="申请状态">
+            <div className="flex items-center gap-1.5">
+              <ApplicationStatusBadge status={app.status} />
+              <ApplicationTypeBadge type={app.applicationType} />
+            </div>
+          </InfoCell>
+          <InfoCell label="摊位">
+            <span className="font-mono font-semibold">{stall?.code || "-"}</span>
+          </InfoCell>
+          <InfoCell label="配电箱">
+            <span className="font-mono">{box?.code || "-"}</span>
+          </InfoCell>
+          <InfoCell label="商户">
+            <span>{app.merchantName}</span>
+          </InfoCell>
+        </div>
+
+        {breakdown && <CapacityBreakdownPanel breakdown={breakdown} />}
+
+        <div className="p-4 rounded-lg bg-industrial-50 border border-industrial-200 space-y-3">
+          <div className="text-sm font-semibold text-industrial-800">审批功率设置</div>
+          <div>
+            <label className="label">审批通过功率 (kW)</label>
+            <input
+              type="number"
+              step={0.5}
+              min={0}
+              max={maxApprovable}
+              className="input font-mono"
+              value={approvedPower}
+              onChange={(e) => setApprovedPower(parseFloat(e.target.value) || 0)}
+            />
+            <p className="mt-1 text-[11px] text-industrial-400">
+              最大可审批：{formatKW(maxApprovable)} kW（输入 0 ~ {formatKW(maxApprovable)} 之间的值）
+            </p>
+          </div>
+
+          {isTempBoost ? (
+            <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+              <div className="text-sm text-amber-800">
+                原功率 <span className="font-mono font-bold">{formatKW(originalPower)}</span> kW + 审批通过{" "}
+                <span className="font-mono font-bold text-amber-700">{formatKW(approvedPower)}</span> kW = 总计{" "}
+                <span className="font-mono font-bold text-industrial-800">{formatKW(totalPower)}</span> kW
+              </div>
+            </div>
+          ) : (
+            <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+              <div className="text-sm text-blue-800">
+                审批通过功率：<span className="font-mono font-bold">{formatKW(approvedPower)}</span> kW
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="label">审批意见</label>
+            <textarea
+              className="input min-h-[80px] resize-y"
+              placeholder="请输入审批意见（选填）"
+              value={opinion}
+              onChange={(e) => setOpinion(e.target.value)}
+            />
+          </div>
+        </div>
       </div>
     </Modal>
   );
