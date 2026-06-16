@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ClipboardList,
   Server,
@@ -121,7 +121,7 @@ function StallsPanel() {
   const { boxes = [] } = useBoxStore();
   const { stalls = [], updateStall, deleteStall } = useStallStore();
   const toast = useToast();
-  const [editing, setEditing] = useState<Stall | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const { addStall } = useStallStore();
@@ -131,7 +131,7 @@ function StallsPanel() {
       toast.warning("该摊位已接电锁定，无法修改");
       return;
     }
-    setEditing({ ...s });
+    setEditingId(s.id);
   };
 
   const handleDelete = (s: Stall) => {
@@ -140,14 +140,6 @@ function StallsPanel() {
       toast.success(`已删除摊位 ${s.code}`);
     } else {
       toast.error("删除失败：接电锁定的摊位不能删除");
-    }
-  };
-
-  const handleSave = () => {
-    if (editing) {
-      updateStall(editing.id, { ...editing, updatedAt: nowISO() });
-      toast.success(`已更新摊位 ${editing.code}`);
-      setEditing(null);
     }
   };
 
@@ -227,9 +219,10 @@ function StallsPanel() {
                       <div className="flex justify-end gap-1">
                         <button
                           type="button"
-                          className="btn-ghost p-2"
+                          className={`btn-ghost p-2 ${s.locked ? "opacity-50 cursor-not-allowed" : ""}`}
                           onClick={() => openEdit(s)}
-                          title="编辑"
+                          title={s.locked ? "已锁定，无法编辑" : "编辑"}
+                          disabled={s.locked}
                         >
                           <Pencil size={14} />
                         </button>
@@ -251,21 +244,26 @@ function StallsPanel() {
         </div>
       </div>
 
-      {editing && (
-        <StallFormModal
-          title={`编辑摊位 ${editing.code}`}
-          boxes={boxes}
-          initial={editing}
-          onClose={() => setEditing(null)}
-          onSubmit={(form) => {
-            setEditing(form);
-            setTimeout(() => handleSave(), 0);
-          }}
-          submitLabel="保存修改"
-          mode="edit"
-          locked={editing.locked}
-        />
-      )}
+      {editingId && (() => {
+        const editing = stalls.find(s => s.id === editingId);
+        if (!editing) return null;
+        return (
+          <StallFormModal
+            title={`编辑摊位 ${editing.code}`}
+            boxes={boxes}
+            initial={editing}
+            onClose={() => setEditingId(null)}
+            onSubmit={(form) => {
+              updateStall(form.id, { ...form, updatedAt: nowISO() });
+              toast.success(`已更新摊位 ${form.code}`);
+              setEditingId(null);
+            }}
+            submitLabel="保存修改"
+            mode="edit"
+            locked={editing.locked}
+          />
+        );
+      })()}
 
       {creating && (
         <StallFormModal
@@ -314,6 +312,12 @@ function StallFormModal({ title, boxes, initial, onClose, onSubmit, submitLabel,
       gridCol: 1,
     };
   });
+
+  useEffect(() => {
+    if (initial) {
+      setForm({ ...initial });
+    }
+  }, [initial?.id]);
 
   const submit = () => {
     if (!form.code.trim()) return toast.error("请输入摊位编号");
@@ -463,14 +467,6 @@ function BoxesPanel() {
   const [editing, setEditing] = useState<DistributionBox | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const handleSave = () => {
-    if (editing) {
-      updateBox(editing.id, { ...editing, updatedAt: nowISO() });
-      toast.success(`已更新配电箱 ${editing.code}`);
-      setEditing(null);
-    }
-  };
-
   const handleCreate = (form: DistributionBox) => {
     addBox(form);
     toast.success(`已创建配电箱 ${form.code}`);
@@ -564,9 +560,10 @@ function BoxesPanel() {
           title={`编辑配电箱 ${editing.code}`}
           initial={editing}
           onClose={() => setEditing(null)}
-          onSubmit={(f) => {
-            setEditing(f);
-            setTimeout(() => handleSave(), 0);
+          onSubmit={(form) => {
+            updateBox(form.id, { ...form, updatedAt: nowISO() });
+            toast.success(`已更新配电箱 ${form.code}`);
+            setEditing(null);
           }}
           submitLabel="保存修改"
         />

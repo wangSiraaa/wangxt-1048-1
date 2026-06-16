@@ -18,6 +18,7 @@ const borderMap: Record<StallStatus, string> = {
   [StallStatus.CONNECTED]: "border-emerald-400",
   [StallStatus.SUSPENDED]: "border-red-400",
   [StallStatus.ABNORMAL]: "border-purple-400",
+  [StallStatus.LIMITED]: "border-amber-400",
 };
 
 const bgMap: Record<StallStatus, string> = {
@@ -26,6 +27,7 @@ const bgMap: Record<StallStatus, string> = {
   [StallStatus.CONNECTED]: "from-emerald-50 to-emerald-100/40",
   [StallStatus.SUSPENDED]: "from-red-50 to-red-100/40",
   [StallStatus.ABNORMAL]: "from-purple-50 to-purple-100/40",
+  [StallStatus.LIMITED]: "from-amber-50 to-amber-100/40",
 };
 
 const iconMap: Record<StallStatus, React.ReactNode> = {
@@ -34,6 +36,7 @@ const iconMap: Record<StallStatus, React.ReactNode> = {
   [StallStatus.CONNECTED]: <Zap size={12} className="text-safe-normal" />,
   [StallStatus.SUSPENDED]: <AlertTriangle size={12} className="text-safe-danger" />,
   [StallStatus.ABNORMAL]: <AlertTriangle size={12} className="text-purple-500" />,
+  [StallStatus.LIMITED]: <Snowflake size={12} className="text-amber-500" />,
 };
 
 export default function StallCard({ stall, onClick, selected }: Props) {
